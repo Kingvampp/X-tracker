@@ -1,0 +1,12 @@
+{
+    "twitter": {
+        "consumer_key": "Your_API_Key_Here",
+        "consumer_secret": "Your_Consumer_Secret_Here",
+        "access_token": "Your_Access_Token_Here",
+        "access_token_secret": "Your_Access_Token_Secret_Here",
+        "bearer_token": "Your_Bearer_Token_Here"
+    },
+    "discord": {
+        "token": "Your_Discord_Token_Here"
+    }
+} 
