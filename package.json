@@ -1,5 +1,5 @@
 {
-  "name": "your-bot-name",
+  "name": "twitter-discord-bot",
   "version": "1.0.0",
   "description": "Your bot description",
   "main": "index.js",
@@ -8,9 +8,14 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
-    "dotenv": "^16.0.3"
+    "discord.js": "^14.0.0",
+    "dotenv": "^16.0.3",
+    "twitter-api-v2": "^1.15.0"
   },
   "devDependencies": {
     "nodemon": "^2.0.22"
-  }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
 }
