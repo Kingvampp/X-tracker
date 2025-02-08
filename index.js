@@ -12,14 +12,21 @@ const client = new Client({
     partials: [Partials.Channel]
 });
 
+// Initialize Twitter client with rate limit handling
 const twitterClient = new TwitterApi({
     appKey: process.env.TWITTER_CONSUMER_KEY,
     appSecret: process.env.TWITTER_CONSUMER_SECRET,
     accessToken: process.env.TWITTER_ACCESS_TOKEN,
     accessSecret: process.env.TWITTER_ACCESS_TOKEN_SECRET,
+}, {
+    retry: true, // Enable automatic retries
+    retryAfter: 60000, // Wait 1 minute before retrying
+    handlerTimeout: 90000, // Increase timeout
 });
 
 const trackedUsers = new Map();
+const rateLimitDelay = 60000; // 1 minute delay between API calls
+let lastApiCall = 0;
 
 // Solana address pattern
 const solanaAddressPattern = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
@@ -28,9 +35,22 @@ function createJupiterLink(tokenAddress) {
     return `https://jup.ag/swap/SOL-${tokenAddress}`;
 }
 
+async function waitForRateLimit() {
+    const now = Date.now();
+    const timeSinceLastCall = now - lastApiCall;
+    if (timeSinceLastCall < rateLimitDelay) {
+        const waitTime = rateLimitDelay - timeSinceLastCall;
+        console.log(`Waiting ${waitTime}ms for rate limit...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    lastApiCall = Date.now();
+}
+
 async function startTracking(username, channelId) {
     try {
         console.log(`Attempting to track @${username} in channel ${channelId}`);
+        await waitForRateLimit();
+
         const user = await twitterClient.v2.userByUsername(username);
         if (!user.data) {
             throw new Error('User not found');
@@ -38,6 +58,8 @@ async function startTracking(username, channelId) {
 
         const userId = user.data.id;
         console.log(`Successfully found user @${username} (ID: ${userId})`);
+        
+        await waitForRateLimit();
         
         // Get the most recent tweet to start tracking from there
         const recentTweets = await twitterClient.v2.userTimeline(userId, {
@@ -50,12 +72,18 @@ async function startTracking(username, channelId) {
         trackedUsers.set(username.toLowerCase(), {
             userId: userId,
             channelId: channelId,
-            lastTweetId: lastTweetId
+            lastTweetId: lastTweetId,
+            lastCheck: Date.now()
         });
 
         checkNewTweets(username.toLowerCase());
         return true;
     } catch (error) {
+        if (error.code === 429) {
+            console.log('Rate limit reached, waiting before retry...');
+            await new Promise(resolve => setTimeout(resolve, rateLimitDelay));
+            return startTracking(username, channelId);
+        }
         console.error(`Error starting tracking for ${username}:`, error);
         return false;
     }
@@ -68,12 +96,22 @@ async function checkNewTweets(username) {
         return;
     }
 
+    // Ensure we're not checking too frequently
+    const timeSinceLastCheck = Date.now() - userData.lastCheck;
+    if (timeSinceLastCheck < rateLimitDelay) {
+        const nextCheck = rateLimitDelay - timeSinceLastCheck;
+        setTimeout(() => checkNewTweets(username), nextCheck);
+        return;
+    }
+
     try {
+        await waitForRateLimit();
         console.log(`Checking tweets for @${username} (ID: ${userData.userId})`);
+        
         const tweets = await twitterClient.v2.userTimeline(userData.userId, {
             exclude: ['retweets'],
             since_id: userData.lastTweetId,
-            max_results: 100
+            max_results: 10 // Reduced to avoid rate limits
         });
 
         console.log(`Found ${tweets.data?.data?.length || 0} new tweets`);
@@ -104,8 +142,6 @@ async function checkNewTweets(username) {
                         }
                     }]
                 });
-            } else {
-                console.log('No Solana addresses found in tweet');
             }
         }
 
@@ -114,13 +150,13 @@ async function checkNewTweets(username) {
             console.log(`Updated last tweet ID to: ${userData.lastTweetId}`);
         }
 
-        // Store the updated userData
+        userData.lastCheck = Date.now();
         trackedUsers.set(username, userData);
 
-        setTimeout(() => checkNewTweets(username), 15000); // Checking every 15 seconds
+        setTimeout(() => checkNewTweets(username), rateLimitDelay);
     } catch (error) {
         console.error(`Error checking tweets for ${username}:`, error);
-        setTimeout(() => checkNewTweets(username), 60000);
+        setTimeout(() => checkNewTweets(username), rateLimitDelay * 2);
     }
 }
 
