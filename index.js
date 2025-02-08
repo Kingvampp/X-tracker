@@ -30,21 +30,30 @@ function createJupiterLink(tokenAddress) {
 
 async function startTracking(username, channelId) {
     try {
+        console.log(`Attempting to track @${username} in channel ${channelId}`);
         const user = await twitterClient.v2.userByUsername(username);
         if (!user.data) {
             throw new Error('User not found');
         }
 
         const userId = user.data.id;
-        console.log(`Starting to track @${username} (ID: ${userId})`);
+        console.log(`Successfully found user @${username} (ID: ${userId})`);
         
-        trackedUsers.set(username, {
+        // Get the most recent tweet to start tracking from there
+        const recentTweets = await twitterClient.v2.userTimeline(userId, {
+            max_results: 5
+        });
+        
+        const lastTweetId = recentTweets.data?.data?.[0]?.id || null;
+        console.log(`Starting tracking from tweet ID: ${lastTweetId}`);
+
+        trackedUsers.set(username.toLowerCase(), {
             userId: userId,
             channelId: channelId,
-            lastTweetId: null
+            lastTweetId: lastTweetId
         });
 
-        checkNewTweets(username);
+        checkNewTweets(username.toLowerCase());
         return true;
     } catch (error) {
         console.error(`Error starting tracking for ${username}:`, error);
@@ -54,22 +63,27 @@ async function startTracking(username, channelId) {
 
 async function checkNewTweets(username) {
     const userData = trackedUsers.get(username);
-    if (!userData) return;
+    if (!userData) {
+        console.log(`No user data found for ${username}`);
+        return;
+    }
 
     try {
-        console.log(`Checking tweets for @${username}...`);
+        console.log(`Checking tweets for @${username} (ID: ${userData.userId})`);
         const tweets = await twitterClient.v2.userTimeline(userData.userId, {
             exclude: ['retweets'],
             since_id: userData.lastTweetId,
             max_results: 100
         });
 
+        console.log(`Found ${tweets.data?.data?.length || 0} new tweets`);
+
         for (const tweet of tweets.data?.data || []) {
-            console.log(`Processing tweet: ${tweet.text}`);
+            console.log(`Processing tweet from @${username}: ${tweet.text}`);
             const solanaAddresses = tweet.text.match(solanaAddressPattern);
             
             if (solanaAddresses) {
-                console.log(`Found Solana addresses in tweet: ${solanaAddresses.join(', ')}`);
+                console.log(`Found Solana addresses: ${solanaAddresses.join(', ')}`);
                 const channel = await client.channels.fetch(userData.channelId);
                 
                 const jupiterLinks = solanaAddresses.map(address => ({
@@ -90,14 +104,20 @@ async function checkNewTweets(username) {
                         }
                     }]
                 });
+            } else {
+                console.log('No Solana addresses found in tweet');
             }
         }
 
         if (tweets.data?.data?.[0]) {
             userData.lastTweetId = tweets.data.data[0].id;
+            console.log(`Updated last tweet ID to: ${userData.lastTweetId}`);
         }
 
-        setTimeout(() => checkNewTweets(username), 30000);
+        // Store the updated userData
+        trackedUsers.set(username, userData);
+
+        setTimeout(() => checkNewTweets(username), 15000); // Checking every 15 seconds
     } catch (error) {
         console.error(`Error checking tweets for ${username}:`, error);
         setTimeout(() => checkNewTweets(username), 60000);
@@ -120,7 +140,7 @@ client.on('messageCreate', async message => {
                     message.reply('Please provide a Twitter username to track! Usage: !track <username>');
                     return;
                 }
-                const username = args[0].replace('@', '');
+                const username = args[0].replace('@', '').toLowerCase();
                 const success = await startTracking(username, message.channel.id);
                 if (success) {
                     message.reply(`Now tracking @${username} for Solana token addresses!`);
@@ -134,7 +154,7 @@ client.on('messageCreate', async message => {
                     message.reply('Please provide a Twitter username to untrack! Usage: !untrack <username>');
                     return;
                 }
-                const untrackUsername = args[0].replace('@', '');
+                const untrackUsername = args[0].replace('@', '').toLowerCase();
                 if (trackedUsers.delete(untrackUsername)) {
                     message.reply(`Stopped tracking @${untrackUsername}`);
                 } else {
@@ -153,11 +173,18 @@ client.on('messageCreate', async message => {
                             description: tracked.map(u => `• @${u}`).join('\n'),
                             color: 0x1DA1F2,
                             footer: {
-                                text: 'Only showing tweets containing Solana token addresses'
+                                text: `Tracking ${tracked.length} accounts`
                             }
                         }]
                     });
                 }
+                break;
+
+            case 'debug':
+                const debugInfo = Array.from(trackedUsers.entries()).map(([username, data]) => 
+                    `@${username}: ID=${data.userId}, LastTweet=${data.lastTweetId}, Channel=${data.channelId}`
+                ).join('\n');
+                message.reply(`Debug Info:\n${debugInfo}`);
                 break;
 
             case 'help':
@@ -169,12 +196,10 @@ client.on('messageCreate', async message => {
                             { name: '!track <username>', value: 'Start tracking a Twitter account for token addresses' },
                             { name: '!untrack <username>', value: 'Stop tracking a Twitter account' },
                             { name: '!list', value: 'List all tracked accounts' },
+                            { name: '!debug', value: 'Show debug information' },
                             { name: '!help', value: 'Show this help message' }
                         ],
-                        color: 0x0099ff,
-                        footer: {
-                            text: 'Only shows tweets containing Solana token addresses'
-                        }
+                        color: 0x0099ff
                     }]
                 });
                 break;
@@ -188,6 +213,12 @@ client.on('messageCreate', async message => {
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity('Tracking Solana tokens | !help', { type: 'WATCHING' });
+    
+    // Restart tracking for all users
+    console.log('Restarting tracking for all users...');
+    trackedUsers.forEach((data, username) => {
+        checkNewTweets(username);
+    });
 });
 
 client.login(process.env.DISCORD_TOKEN);
