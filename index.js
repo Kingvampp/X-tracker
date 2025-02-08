@@ -19,10 +19,9 @@ const twitterClient = new TwitterApi({
     accessSecret: process.env.TWITTER_ACCESS_TOKEN_SECRET,
 });
 
-// Store tracked users and their associated channels
 const trackedUsers = new Map();
 
-// Enhanced Solana address pattern
+// Solana address pattern
 const solanaAddressPattern = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 
 function createJupiterLink(tokenAddress) {
@@ -31,24 +30,21 @@ function createJupiterLink(tokenAddress) {
 
 async function startTracking(username, channelId) {
     try {
-        // Get user ID from username
         const user = await twitterClient.v2.userByUsername(username);
         if (!user.data) {
             throw new Error('User not found');
         }
 
         const userId = user.data.id;
+        console.log(`Starting to track @${username} (ID: ${userId})`);
         
-        // Store tracking info
         trackedUsers.set(username, {
             userId: userId,
             channelId: channelId,
             lastTweetId: null
         });
 
-        // Start checking for new tweets
         checkNewTweets(username);
-        
         return true;
     } catch (error) {
         console.error(`Error starting tracking for ${username}:`, error);
@@ -61,17 +57,19 @@ async function checkNewTweets(username) {
     if (!userData) return;
 
     try {
+        console.log(`Checking tweets for @${username}...`);
         const tweets = await twitterClient.v2.userTimeline(userData.userId, {
             exclude: ['retweets'],
             since_id: userData.lastTweetId,
-            max_results: 100 // Increase results to catch more potential token mentions
+            max_results: 100
         });
 
         for (const tweet of tweets.data?.data || []) {
-            // Only process tweets that contain Solana addresses
+            console.log(`Processing tweet: ${tweet.text}`);
             const solanaAddresses = tweet.text.match(solanaAddressPattern);
             
             if (solanaAddresses) {
+                console.log(`Found Solana addresses in tweet: ${solanaAddresses.join(', ')}`);
                 const channel = await client.channels.fetch(userData.channelId);
                 
                 const jupiterLinks = solanaAddresses.map(address => ({
@@ -92,8 +90,6 @@ async function checkNewTweets(username) {
                         }
                     }]
                 });
-
-                console.log(`Found token address in tweet from @${username}: ${tweet.id}`);
             }
         }
 
@@ -101,11 +97,9 @@ async function checkNewTweets(username) {
             userData.lastTweetId = tweets.data.data[0].id;
         }
 
-        // Check every 30 seconds
         setTimeout(() => checkNewTweets(username), 30000);
     } catch (error) {
         console.error(`Error checking tweets for ${username}:`, error);
-        // If error, try again in 1 minute
         setTimeout(() => checkNewTweets(username), 60000);
     }
 }
@@ -129,7 +123,7 @@ client.on('messageCreate', async message => {
                 const username = args[0].replace('@', '');
                 const success = await startTracking(username, message.channel.id);
                 if (success) {
-                    message.reply(`Now tracking @${username} for Solana token mentions! Will only show tweets containing token addresses.`);
+                    message.reply(`Now tracking @${username} for Solana token addresses!`);
                 } else {
                     message.reply(`Failed to track @${username}. Please check the username and try again.`);
                 }
@@ -172,7 +166,7 @@ client.on('messageCreate', async message => {
                         title: 'Solana Token Alert Bot Commands',
                         description: 'This bot tracks Twitter accounts and alerts when they mention Solana token addresses.',
                         fields: [
-                            { name: '!track <username>', value: 'Start tracking a Twitter account for token mentions' },
+                            { name: '!track <username>', value: 'Start tracking a Twitter account for token addresses' },
                             { name: '!untrack <username>', value: 'Stop tracking a Twitter account' },
                             { name: '!list', value: 'List all tracked accounts' },
                             { name: '!help', value: 'Show this help message' }
