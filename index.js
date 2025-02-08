@@ -22,7 +22,7 @@ const twitterClient = new TwitterApi({
 // Store tracked users and their associated channels
 const trackedUsers = new Map();
 
-// Solana address regex pattern
+// Enhanced Solana address pattern
 const solanaAddressPattern = /[1-9A-HJ-NP-Za-km-z]{32,44}/g;
 
 function createJupiterLink(tokenAddress) {
@@ -62,51 +62,51 @@ async function checkNewTweets(username) {
 
     try {
         const tweets = await twitterClient.v2.userTimeline(userData.userId, {
-            exclude: ['retweets'], // Only excluding retweets, including replies
-            since_id: userData.lastTweetId
+            exclude: ['retweets'],
+            since_id: userData.lastTweetId,
+            max_results: 100 // Increase results to catch more potential token mentions
         });
 
         for (const tweet of tweets.data?.data || []) {
-            const channel = await client.channels.fetch(userData.channelId);
-            
-            // Check for Solana token addresses
+            // Only process tweets that contain Solana addresses
             const solanaAddresses = tweet.text.match(solanaAddressPattern);
-            let description = tweet.text;
             
-            // If Solana addresses found, add Jupiter links
-            const jupiterLinks = [];
             if (solanaAddresses) {
-                solanaAddresses.forEach(address => {
-                    const jupLink = createJupiterLink(address);
-                    jupiterLinks.push(`[Trade ${address.slice(0, 4)}...${address.slice(-4)} on Jupiter](${jupLink})`);
-                });
-            }
+                const channel = await client.channels.fetch(userData.channelId);
+                
+                const jupiterLinks = solanaAddresses.map(address => ({
+                    name: `🚀 Trade ${address.slice(0, 4)}...${address.slice(-4)}`,
+                    value: `[Trade on Jupiter](${createJupiterLink(address)})`
+                }));
 
-            await channel.send({
-                embeds: [{
-                    title: `New Tweet from @${username}`,
-                    description: description,
-                    url: `https://twitter.com/${username}/status/${tweet.id}`,
-                    color: 0x1DA1F2,
-                    timestamp: new Date(),
-                    fields: jupiterLinks.length > 0 ? [
-                        {
-                            name: '🚀 Trade on Jupiter',
-                            value: jupiterLinks.join('\n')
+                await channel.send({
+                    embeds: [{
+                        title: `New Token Alert from @${username}`,
+                        description: tweet.text,
+                        url: `https://twitter.com/${username}/status/${tweet.id}`,
+                        color: 0x1DA1F2,
+                        timestamp: new Date(),
+                        fields: jupiterLinks,
+                        footer: {
+                            text: 'Solana Token Alert Bot'
                         }
-                    ] : []
-                }]
-            });
+                    }]
+                });
+
+                console.log(`Found token address in tweet from @${username}: ${tweet.id}`);
+            }
         }
 
         if (tweets.data?.data?.[0]) {
             userData.lastTweetId = tweets.data.data[0].id;
         }
 
-        // Check again after 30 seconds
+        // Check every 30 seconds
         setTimeout(() => checkNewTweets(username), 30000);
     } catch (error) {
         console.error(`Error checking tweets for ${username}:`, error);
+        // If error, try again in 1 minute
+        setTimeout(() => checkNewTweets(username), 60000);
     }
 }
 
@@ -129,7 +129,7 @@ client.on('messageCreate', async message => {
                 const username = args[0].replace('@', '');
                 const success = await startTracking(username, message.channel.id);
                 if (success) {
-                    message.reply(`Now tracking tweets from @${username} in this channel! Will detect Solana tokens and provide Jupiter trading links.`);
+                    message.reply(`Now tracking @${username} for Solana token mentions! Will only show tweets containing token addresses.`);
                 } else {
                     message.reply(`Failed to track @${username}. Please check the username and try again.`);
                 }
@@ -153,22 +153,34 @@ client.on('messageCreate', async message => {
                 if (tracked.length === 0) {
                     message.reply('No accounts are currently being tracked.');
                 } else {
-                    message.reply(`Currently tracking: ${tracked.map(u => '@' + u).join(', ')}`);
+                    message.reply({
+                        embeds: [{
+                            title: 'Tracked Accounts',
+                            description: tracked.map(u => `• @${u}`).join('\n'),
+                            color: 0x1DA1F2,
+                            footer: {
+                                text: 'Only showing tweets containing Solana token addresses'
+                            }
+                        }]
+                    });
                 }
                 break;
 
             case 'help':
                 message.reply({
                     embeds: [{
-                        title: 'Bot Commands',
-                        description: 'Here are all available commands:',
+                        title: 'Solana Token Alert Bot Commands',
+                        description: 'This bot tracks Twitter accounts and alerts when they mention Solana token addresses.',
                         fields: [
-                            { name: '!track <username>', value: 'Start tracking a Twitter account (includes replies and Solana token detection)' },
+                            { name: '!track <username>', value: 'Start tracking a Twitter account for token mentions' },
                             { name: '!untrack <username>', value: 'Stop tracking a Twitter account' },
                             { name: '!list', value: 'List all tracked accounts' },
                             { name: '!help', value: 'Show this help message' }
                         ],
-                        color: 0x0099ff
+                        color: 0x0099ff,
+                        footer: {
+                            text: 'Only shows tweets containing Solana token addresses'
+                        }
                     }]
                 });
                 break;
@@ -181,7 +193,7 @@ client.on('messageCreate', async message => {
 
 client.on('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
-    client.user.setActivity('!help for commands', { type: 'PLAYING' });
+    client.user.setActivity('Tracking Solana tokens | !help', { type: 'WATCHING' });
 });
 
 client.login(process.env.DISCORD_TOKEN);
